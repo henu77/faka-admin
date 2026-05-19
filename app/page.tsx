@@ -1,6 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+
+const STORAGE_KEY = 'faka_last_form';
+
+function loadSavedForm() {
+  if (typeof window === 'undefined') return { url: '', email: '', key: '' };
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : { url: '', email: '', key: '' };
+  } catch {
+    return { url: '', email: '', key: '' };
+  }
+}
+
+function saveForm(url: string, email: string, key: string) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ url, email, key }));
+  } catch {
+    // ignore
+  }
+}
 
 export default function HomePage() {
   const [url, setUrl] = useState('');
@@ -12,8 +32,21 @@ export default function HomePage() {
   const [polling, setPolling] = useState(false);
   const [taskStatus, setTaskStatus] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Load saved form on mount
+  useEffect(() => {
+    const saved = loadSavedForm();
+    if (saved.url) setUrl(saved.url);
+    if (saved.email) setEmail(saved.email);
+    if (saved.key) setKey(saved.key);
+  }, []);
+
+  // Save form on change
+  useEffect(() => {
+    if (url || email || key) saveForm(url, email, key);
+  }, [url, email, key]);
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setLoading(true);
     setError('');
     setResult(null);
@@ -67,6 +100,13 @@ export default function HomePage() {
         // ignore
       }
     }, 3000);
+  };
+
+  const handleRetry = () => {
+    setError('');
+    setResult(null);
+    setTaskStatus('');
+    handleSubmit();
   };
 
   return (
@@ -124,8 +164,14 @@ export default function HomePage() {
         </form>
 
         {error && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-            {error}
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-700">{error}</p>
+            <button
+              onClick={handleRetry}
+              className="mt-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition"
+            >
+              一键重试
+            </button>
           </div>
         )}
 
