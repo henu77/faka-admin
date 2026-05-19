@@ -56,6 +56,13 @@ export function updateTaskStatus(id: number, status: string, filePath?: string, 
   }
 }
 
+export function resetTask(id: number): void {
+  const db = getDb();
+  db.prepare(
+    "UPDATE tasks SET status = 'pending', file_path = NULL, error_msg = NULL, completed_at = NULL WHERE id = ?"
+  ).run(id);
+}
+
 export function getTaskStats(): { total: number; pending: number; processing: number; done: number; failed: number } {
   const db = getDb();
   const rows = db.prepare(

@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 export default function TasksPage() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
+  const [errorModal, setErrorModal] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<number | null>(null);
 
   const loadTasks = () => {
     fetch('/api/tasks').then((r) => r.json()).then((d) => {
@@ -14,6 +16,18 @@ export default function TasksPage() {
   };
 
   useEffect(() => { loadTasks(); }, []);
+
+  const handleRetry = async (id: number) => {
+    setRetryingId(id);
+    const res = await fetch(`/api/retry/${id}`, { method: 'POST' });
+    if (res.ok) {
+      loadTasks();
+    } else {
+      const data = await res.json();
+      alert(data.error || '重试失败');
+    }
+    setRetryingId(null);
+  };
 
   return (
     <div>
@@ -56,12 +70,28 @@ export default function TasksPage() {
                   <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
                   <td className="px-4 py-3 text-gray-500">{t.created_at}</td>
                   <td className="px-4 py-3">
-                    {t.status === 'done' && (
-                      <a href={`/api/download/${t.id}`} className="text-xs text-blue-600 hover:underline">下载</a>
-                    )}
-                    {t.status === 'failed' && (
-                      <span className="text-xs text-red-500" title={t.error_msg}>查看错误</span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {t.status === 'done' && (
+                        <a href={`/api/download/${t.id}`} className="text-xs text-blue-600 hover:underline">下载</a>
+                      )}
+                      {t.status === 'failed' && (
+                        <>
+                          <button
+                            onClick={() => setErrorModal(t.error_msg || '无错误信息')}
+                            className="text-xs text-red-600 hover:underline"
+                          >
+                            查看错误
+                          </button>
+                          <button
+                            onClick={() => handleRetry(t.id)}
+                            disabled={retryingId === t.id}
+                            className="text-xs text-orange-600 hover:underline disabled:opacity-50"
+                          >
+                            {retryingId === t.id ? '重试中...' : '重试'}
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -87,12 +117,26 @@ export default function TasksPage() {
               </div>
               <div className="flex items-center justify-between pt-1 border-t">
                 <span className="text-xs text-gray-400">{t.created_at}</span>
-                <div>
+                <div className="flex gap-2">
                   {t.status === 'done' && (
                     <a href={`/api/download/${t.id}`} className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-lg font-medium">下载</a>
                   )}
                   {t.status === 'failed' && (
-                    <span className="text-xs text-red-500" title={t.error_msg}>错误详情</span>
+                    <>
+                      <button
+                        onClick={() => setErrorModal(t.error_msg || '无错误信息')}
+                        className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded-lg font-medium"
+                      >
+                        错误详情
+                      </button>
+                      <button
+                        onClick={() => handleRetry(t.id)}
+                        disabled={retryingId === t.id}
+                        className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded-lg font-medium disabled:opacity-50"
+                      >
+                        {retryingId === t.id ? '重试中...' : '重试'}
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -100,6 +144,19 @@ export default function TasksPage() {
           ))
         )}
       </div>
+
+      {/* Error modal */}
+      {errorModal !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setErrorModal(null)}>
+          <div className="bg-white rounded-xl p-4 md:p-6 max-w-lg w-full max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-red-700">错误详情</h3>
+              <button onClick={() => setErrorModal(null)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+            </div>
+            <pre className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg whitespace-pre-wrap break-all">{errorModal}</pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
