@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: '/admin', label: '仪表盘', icon: '📊' },
   { href: '/admin/keys', label: '卡密', icon: '🔑' },
   { href: '/admin/tasks', label: '任务', icon: '📋' },
+  { href: '/admin/xianyu', label: '闲鱼发卡', icon: '🐟' },
   { href: '/admin/settings', label: '设置', icon: '⚙️' },
 ];
 
