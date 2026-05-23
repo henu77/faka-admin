@@ -10,6 +10,8 @@ export default function KeysPage() {
   const [genIsSuper, setGenIsSuper] = useState(false);
   const [genResult, setGenResult] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchMaxUses, setBatchMaxUses] = useState(1);
 
   const loadKeys = () => {
     fetch('/api/keys').then((r) => r.json()).then((d) => setKeys(d.keys || []));
@@ -52,16 +54,114 @@ export default function KeysPage() {
     navigator.clipboard.writeText(genResult.join('\n'));
   };
 
+  // --- Batch operations ---
+  const toggleSelect = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === keys.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(keys.map((k: any) => k.id)));
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`确定删除选中的 ${selected.size} 个卡密？关联的任务也会被删除。`)) return;
+    const res = await fetch('/api/keys/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', ids: [...selected] }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setSelected(new Set());
+      loadKeys();
+    }
+  };
+
+  const handleBatchStatus = async (action: 'enable' | 'disable') => {
+    if (selected.size === 0) return;
+    const label = action === 'enable' ? '启用' : '禁用';
+    if (!confirm(`确定${label}选中的 ${selected.size} 个卡密？`)) return;
+    await fetch('/api/keys/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ids: [...selected] }),
+    });
+    setSelected(new Set());
+    loadKeys();
+  };
+
+  const handleBatchMaxUses = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`确定将选中卡密的使用次数改为 ${batchMaxUses} ？`)) return;
+    await fetch('/api/keys/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set_max_uses', ids: [...selected], value: batchMaxUses }),
+    });
+    setSelected(new Set());
+    loadKeys();
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4 md:mb-6">
         <h1 className="text-xl md:text-2xl font-bold">卡密管理</h1>
-        <button
-          onClick={() => { setShowGen(!showGen); setGenResult([]); }}
-          className="px-3 md:px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
-        >
-          {showGen ? '取消' : '生成卡密'}
-        </button>
+        <div className="flex gap-2">
+          {selected.size > 0 && (
+            <>
+              <span className="self-center text-xs text-gray-500 mr-1">已选 {selected.size}</span>
+              <button
+                onClick={handleBatchDelete}
+                className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs hover:bg-red-200 transition"
+              >
+                批量删除
+              </button>
+              <button
+                onClick={() => handleBatchStatus('enable')}
+                className="px-3 py-2 bg-green-100 text-green-700 rounded-lg text-xs hover:bg-green-200 transition"
+              >
+                批量启用
+              </button>
+              <button
+                onClick={() => handleBatchStatus('disable')}
+                className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-xs hover:bg-gray-300 transition"
+              >
+                批量禁用
+              </button>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={1}
+                  max={9999}
+                  value={batchMaxUses}
+                  onChange={(e) => setBatchMaxUses(Number(e.target.value))}
+                  className="w-14 px-2 py-2 border rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={handleBatchMaxUses}
+                  className="px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-xs hover:bg-blue-200 transition whitespace-nowrap"
+                >
+                  改次数
+                </button>
+              </div>
+            </>
+          )}
+          <button
+            onClick={() => { setShowGen(!showGen); setGenResult([]); }}
+            className="px-3 md:px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
+          >
+            {showGen ? '取消' : '生成卡密'}
+          </button>
+        </div>
       </div>
 
       {showGen && (
@@ -130,6 +230,14 @@ export default function KeysPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-gray-500 border-b bg-gray-50">
+              <th className="px-4 py-3 w-8">
+                <input
+                  type="checkbox"
+                  checked={keys.length > 0 && selected.size === keys.length}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 rounded border-gray-300"
+                />
+              </th>
               <th className="px-4 py-3 font-medium">卡密</th>
               <th className="px-4 py-3 font-medium">类型</th>
               <th className="px-4 py-3 font-medium">使用次数</th>
@@ -140,10 +248,18 @@ export default function KeysPage() {
           </thead>
           <tbody>
             {keys.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">暂无卡密</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">暂无卡密</td></tr>
             ) : (
               keys.map((k: any) => (
                 <tr key={k.id} className="border-b last:border-0 hover:bg-gray-50">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(k.id)}
+                      onChange={() => toggleSelect(k.id)}
+                      className="w-4 h-4 rounded border-gray-300"
+                    />
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs">{k.key}</td>
                   <td className="px-4 py-3">
                     {k.is_super ? (
@@ -182,20 +298,28 @@ export default function KeysPage() {
           <div className="bg-white rounded-xl border p-6 text-center text-gray-400 text-sm">暂无卡密</div>
         ) : (
           keys.map((k: any) => (
-            <div key={k.id} className="bg-white rounded-xl border p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-sm break-all">{k.key}</span>
-                <div className="flex gap-1.5 shrink-0 ml-2">
-                  {k.is_super ? (
-                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">超级</span>
-                  ) : (
-                    <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">普通</span>
-                  )}
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                    k.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                  }`}>
-                    {k.status === 'active' ? '有效' : '已禁用'}
-                  </span>
+            <div key={k.id} className={`bg-white rounded-xl border p-3 space-y-2 ${selected.has(k.id) ? 'ring-2 ring-blue-400' : ''}`}>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={selected.has(k.id)}
+                  onChange={() => toggleSelect(k.id)}
+                  className="w-4 h-4 rounded border-gray-300 shrink-0"
+                />
+                <div className="flex items-center justify-between flex-1 min-w-0">
+                  <span className="font-mono text-sm break-all truncate">{k.key}</span>
+                  <div className="flex gap-1.5 shrink-0 ml-2">
+                    {k.is_super ? (
+                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">超级</span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">普通</span>
+                    )}
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      k.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {k.status === 'active' ? '有效' : '已禁用'}
+                    </span>
+                  </div>
                 </div>
               </div>
               <div className="flex items-center justify-between text-xs text-gray-500">

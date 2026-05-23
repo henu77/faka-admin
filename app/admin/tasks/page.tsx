@@ -29,9 +29,28 @@ export default function TasksPage() {
     setRetryingId(null);
   };
 
+  const handleCleanup = async () => {
+    if (!confirm('确定要删除所有已下载的 PPT 文件吗？此操作不可恢复。')) return;
+    const res = await fetch('/api/cleanup', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      alert(`已清理 ${data.deletedCount} 个 PPT 文件`);
+    } else {
+      alert(data.error || '清理失败');
+    }
+  };
+
   return (
     <div>
-      <h1 className="text-xl md:text-2xl font-bold mb-4 md:mb-6">任务历史</h1>
+      <div className="flex items-center justify-between mb-4 md:mb-6">
+        <h1 className="text-xl md:text-2xl font-bold">任务历史</h1>
+        <button
+          onClick={handleCleanup}
+          className="px-3 md:px-4 py-2 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 transition"
+        >
+          清理PPT
+        </button>
+      </div>
 
       {stats && (
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 md:gap-3 mb-4 md:mb-6">

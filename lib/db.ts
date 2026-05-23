@@ -48,9 +48,31 @@ function runMigrations(db: Database.Database) {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS xianyu_accounts (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT    NOT NULL UNIQUE,
+      cookies    TEXT    NOT NULL,
+      status     TEXT    NOT NULL DEFAULT 'disconnected',
+      error_msg  TEXT,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+      updated_at TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS xianyu_logs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT    NOT NULL REFERENCES xianyu_accounts(account_id),
+      chat_id    TEXT    NOT NULL,
+      buyer_id   TEXT    NOT NULL,
+      key        TEXT    NOT NULL,
+      message    TEXT    NOT NULL,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_keys_key ON keys(key);
     CREATE INDEX IF NOT EXISTS idx_tasks_key_id ON tasks(key_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_xianyu_accounts_status ON xianyu_accounts(status);
+    CREATE INDEX IF NOT EXISTS idx_xianyu_logs_account_id ON xianyu_logs(account_id);
   `);
 
   // Seed default settings
