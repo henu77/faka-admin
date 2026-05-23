@@ -288,7 +288,7 @@ export function addAccount(accountId: string, cookies: string): { ok: boolean; e
   try {
     const db = getDb();
     const stmt = db.prepare(
-      'INSERT OR REPLACE INTO xianyu_accounts (account_id, cookies, status, updated_at) VALUES (?, ?, ?, datetime("now","localtime"))'
+      "INSERT OR REPLACE INTO xianyu_accounts (account_id, cookies, status, updated_at) VALUES (?, ?, ?, datetime('now','localtime'))"
     );
     stmt.run(accountId, cookies, 'disconnected');
     return { ok: true };
@@ -337,7 +337,7 @@ function updateAccountStatus(accountId: string, status: string, errorMsg?: strin
   try {
     const db = getDb();
     db.prepare(
-      'UPDATE xianyu_accounts SET status = ?, error_msg = ?, updated_at = datetime("now","localtime") WHERE account_id = ?'
+      "UPDATE xianyu_accounts SET status = ?, error_msg = ?, updated_at = datetime('now','localtime') WHERE account_id = ?"
     ).run(status, errorMsg || null, accountId);
   } catch { }
 }
