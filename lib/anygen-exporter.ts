@@ -649,8 +649,12 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
     const pages = browser.pages();
     const page = pages.length > 0 ? pages[0] : await browser.newPage();
 
-    page.on('console', (_msg) => {
-      // 静默浏览器控制台输出，避免日志噪音
+    page.on('console', (msg) => {
+      const text = msg.text();
+      // 只打印关键日志：AnyGenDirectCV 扫描进度 + 明显异常
+      if (text.includes('[AnyGenDirectCV]') || text.includes('Uncaught')) {
+        console.log('[browser]', text);
+      }
     });
 
     page.on('pageerror', (err) => {
