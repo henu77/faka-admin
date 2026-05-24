@@ -1,8 +1,10 @@
+const path = require('path');
+
 module.exports = {
   apps: [
     {
       name: 'faka-admin',
-      script: 'node_modules/.bin/next',
+      script: path.join(__dirname, 'node_modules', '.bin', 'next'),
       args: 'start -p 3232',
       cwd: __dirname,
       env: {
