@@ -649,7 +649,8 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
     });
 
     page.on('pageerror', (err) => {
-      console.error('[browser pageerror]', err.message);
+      const stack = err.stack?.split('\n').slice(0, 3).join('\n') || '';
+      console.error(`[browser pageerror] ${err.name}: ${err.message}`, stack ? `\n${stack}` : '');
     });
 
     console.log('[open]', pageUrl);
