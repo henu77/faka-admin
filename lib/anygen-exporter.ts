@@ -665,6 +665,21 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
     console.log(`[proxy] 浏览器${config.proxy ? '使用代理: ' + config.proxy : '直连'}`);
     console.log('[open]', pageUrl);
 
+    // 将 AnyGen Cookie 注入浏览器，确保页面以登录态加载（否则共享链接不显示编辑器）
+    const cookieDict = parseCookieHeader(config.cookie);
+    const cookieEntries = Object.entries(cookieDict).filter(([k]) => k && k !== '_csrf_token');
+    if (cookieEntries.length > 0) {
+      await page.context().addCookies(
+        cookieEntries.map(([name, value]) => ({
+          name,
+          value,
+          domain: '.anygen.io',
+          path: '/',
+        }))
+      );
+      console.log('[cookie] 已注入浏览器 Cookie，共', cookieEntries.length, '项');
+    }
+
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
     await page.waitForTimeout(2_000);
 
