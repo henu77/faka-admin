@@ -147,6 +147,31 @@ export default function XianyuMultiPage() {
     <div>
       <h1 className="text-2xl font-bold mb-6">闲鱼多账号自动发卡</h1>
 
+      {/* 使用说明 */}
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 mb-6">
+        <h3 className="text-base font-bold text-blue-800 mb-3">自动回复模板设置说明</h3>
+        <div className="space-y-2 text-sm text-blue-700">
+          <p>
+            <span className="font-medium">网站链接：</span>
+            <code className="mx-1 px-1.5 py-0.5 bg-blue-100 rounded text-xs font-mono">https://你的域名/</code>
+            （即 PPT 导出服务首页，买家在此输入卡密和 AnyGen 链接）
+          </p>
+          <p>
+            <span className="font-medium">获取链接教程：</span>
+            网站首页首次访问时会弹出教程图，请将教程中的获取方式一并告知买家。
+          </p>
+          <div className="mt-3 pt-3 border-t border-blue-200">
+            <p className="font-medium text-blue-800 mb-1">注意事项：</p>
+            <ul className="list-disc list-inside space-y-1 text-xs">
+              <li>买家需提供 <strong>AnyGen 分享链接</strong>（格式：<code className="px-1 bg-blue-100 rounded text-xs">https://www.anygen.io/task/xxx-xxx?share_id=数字</code>）</li>
+              <li>请确保卡密库存充足，可在「卡密管理」页面查看和生成</li>
+              <li>Cookie 过期后需重新获取并更新，否则无法自动回复</li>
+              <li>建议使用小号操作，避免主账号被限制</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       {msg && (
         <div className={`mb-4 px-4 py-2 rounded-lg text-sm ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
           {msg.text}
