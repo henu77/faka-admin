@@ -317,8 +317,8 @@ export function removeAccount(accountId: string): { ok: boolean; error?: string 
   try {
     stopAccount(accountId);
     const db = getDb();
-    db.prepare('DELETE FROM xianyu_accounts WHERE account_id = ?').run(accountId);
     db.prepare('DELETE FROM xianyu_logs WHERE account_id = ?').run(accountId);
+    db.prepare('DELETE FROM xianyu_accounts WHERE account_id = ?').run(accountId);
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e.message };
