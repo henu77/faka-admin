@@ -23,9 +23,11 @@ interface ExportResult {
 // ============================================================
 
 function getConfig() {
+  const proxyEnabled = getSetting('anygen_use_proxy') !== 'false';
+  const proxyUrl = getSetting('anygen_proxy') || undefined;
   return {
     cookie: getSetting('anygen_cookie') || '',
-    proxy: getSetting('anygen_proxy') || undefined,
+    proxy: proxyEnabled ? proxyUrl : undefined,
     headless: getSetting('playwright_headless') !== 'false',
     editorWaitSeconds: parseInt(getSetting('editor_wait_seconds') || '480'),
     stableSeconds: parseInt(getSetting('stable_seconds') || '12'),
@@ -94,6 +96,9 @@ function setProxyEnv(proxy?: string): { restore: () => void } {
 }
 
 async function proxyFetch(url: string, init: RequestInit, proxy?: string): Promise<Response> {
+  let host = url;
+  try { host = new URL(url).hostname; } catch { /* keep raw url */ }
+  console.log(`[proxy] ${proxy ? '使用代理' : '直连'} | ${host}`);
   const env = setProxyEnv(proxy);
   try {
     return await fetch(url, init);
@@ -653,6 +658,7 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
       console.error(`[browser pageerror] ${err.name}: ${err.message}`, stack ? `\n${stack}` : '');
     });
 
+    console.log(`[proxy] 浏览器${config.proxy ? '使用代理: ' + config.proxy : '直连'}`);
     console.log('[open]', pageUrl);
 
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });

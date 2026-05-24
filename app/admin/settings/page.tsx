@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 export default function SettingsPage() {
   const [anygenCookie, setAnygenCookie] = useState('');
   const [anygenProxy, setAnygenProxy] = useState('');
+  const [anygenUseProxy, setAnygenUseProxy] = useState(true);
   const [playwrightHeadless, setPlaywrightHeadless] = useState(true);
   const [editorWaitSeconds, setEditorWaitSeconds] = useState(480);
   const [stableSeconds, setStableSeconds] = useState(12);
@@ -18,6 +19,7 @@ export default function SettingsPage() {
     fetch('/api/settings').then((r) => r.json()).then((d) => {
       setAnygenCookie(d.anygen_cookie || '');
       setAnygenProxy(d.anygen_proxy || '');
+      setAnygenUseProxy(d.anygen_use_proxy !== 'false');
       setPlaywrightHeadless(d.playwright_headless !== 'false');
       setEditorWaitSeconds(parseInt(d.editor_wait_seconds || '480'));
       setStableSeconds(parseInt(d.stable_seconds || '12'));
@@ -36,6 +38,7 @@ export default function SettingsPage() {
       body: JSON.stringify({
         anygen_cookie: anygenCookie,
         anygen_proxy: anygenProxy,
+        anygen_use_proxy: anygenUseProxy ? 'true' : 'false',
         playwright_headless: playwrightHeadless ? 'true' : 'false',
         editor_wait_seconds: String(editorWaitSeconds),
         stable_seconds: String(stableSeconds),
@@ -52,6 +55,7 @@ export default function SettingsPage() {
   const handleReset = () => {
     setAnygenCookie('');
     setAnygenProxy('');
+    setAnygenUseProxy(true);
     setPlaywrightHeadless(true);
     setEditorWaitSeconds(480);
     setStableSeconds(12);
@@ -94,6 +98,20 @@ export default function SettingsPage() {
                 placeholder="例如 http://127.0.0.1:7897"
               />
               <p className="mt-1 text-xs text-gray-400">可选，用于加速网络连接（如 Clash 代理）</p>
+
+              <div className="flex items-center gap-3 mt-3">
+                <input
+                  type="checkbox"
+                  id="useProxy"
+                  checked={anygenUseProxy}
+                  onChange={(e) => setAnygenUseProxy(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500"
+                />
+                <label htmlFor="useProxy" className="text-sm font-medium text-gray-700">
+                  启用代理
+                </label>
+                <p className="text-xs text-gray-400">关闭后即使填写了代理地址也不使用代理，所有请求直连</p>
+              </div>
             </div>
 
             <div className="flex items-center gap-3">
