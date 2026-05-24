@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { verifyToken } from '@/lib/auth';
 import {
   addAccount,
+  updateAccount,
   removeAccount,
   getAccounts,
   getAccountLogs,
@@ -40,9 +41,18 @@ export async function POST(request: NextRequest) {
     if (!body.accountId || !body.cookies) {
       return Response.json({ error: '账号ID和Cookie不能为空' }, { status: 400 });
     }
-    const result = addAccount(body.accountId, body.cookies);
+    const result = addAccount(body.accountId, body.cookies, body.replyTemplate);
     if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
     return Response.json({ success: true, message: '账号已添加' });
+  }
+
+  if (body.action === 'edit') {
+    if (!body.accountId || !body.cookies) {
+      return Response.json({ error: '账号ID和Cookie不能为空' }, { status: 400 });
+    }
+    const result = updateAccount(body.accountId, body.cookies, body.replyTemplate);
+    if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+    return Response.json({ success: true, message: '账号已更新' });
   }
 
   if (body.action === 'remove') {

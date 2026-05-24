@@ -3,9 +3,11 @@
 import { useEffect, useState, useCallback } from 'react';
 
 interface Account {
+  id: number;
   account_id: string;
   status: string;
   error_msg?: string;
+  reply_template?: string;
   created_at: string;
   updated_at: string;
 }
@@ -27,7 +29,8 @@ export default function XianyuMultiPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [formData, setFormData] = useState({ accountId: '', cookies: '' });
+  const [editingAccount, setEditingAccount] = useState<string | null>(null);
+  const [formData, setFormData] = useState({ accountId: '', cookies: '', replyTemplate: '' });
 
   const flash = (text: string, type: 'ok' | 'err') => {
     setMsg({ text, type });
@@ -48,17 +51,33 @@ export default function XianyuMultiPage() {
 
   useEffect(() => {
     refreshAccounts();
-    const t = setInterval(refreshAccounts, 5000);
+    const t = setInterval(refreshAccounts, 15000);
     return () => clearInterval(t);
   }, [refreshAccounts]);
 
   useEffect(() => {
     if (selectedAccount) {
       refreshLogs(selectedAccount);
-      const t = setInterval(() => refreshLogs(selectedAccount), 5000);
+      const t = setInterval(() => refreshLogs(selectedAccount), 15000);
       return () => clearInterval(t);
     }
   }, [selectedAccount, refreshLogs]);
+
+  const resetForm = () => {
+    setFormData({ accountId: '', cookies: '', replyTemplate: '' });
+    setShowAddForm(false);
+    setEditingAccount(null);
+  };
+
+  const startEdit = (acc: Account) => {
+    setEditingAccount(acc.account_id);
+    setFormData({
+      accountId: acc.account_id,
+      cookies: '',
+      replyTemplate: acc.reply_template || '',
+    });
+    setShowAddForm(false);
+  };
 
   const handleAddAccount = async () => {
     if (!formData.accountId.trim() || !formData.cookies.trim()) {
@@ -75,11 +94,32 @@ export default function XianyuMultiPage() {
     const json = await res.json();
     if (json.success) {
       flash('账号已添加', 'ok');
-      setFormData({ accountId: '', cookies: '' });
-      setShowAddForm(false);
+      resetForm();
       refreshAccounts();
     } else {
       flash(json.error || '添加失败', 'err');
+    }
+  };
+
+  const handleEditAccount = async () => {
+    if (!formData.accountId.trim() || !formData.cookies.trim()) {
+      flash('请填写账号ID和Cookie', 'err');
+      return;
+    }
+    setLoading(true);
+    const res = await fetch('/api/xianyu-multi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'edit', ...formData }),
+    });
+    setLoading(false);
+    const json = await res.json();
+    if (json.success) {
+      flash('账号已更新', 'ok');
+      resetForm();
+      refreshAccounts();
+    } else {
+      flash(json.error || '更新失败', 'err');
     }
   };
 
@@ -96,6 +136,7 @@ export default function XianyuMultiPage() {
     if (json.success) {
       flash('账号已删除', 'ok');
       if (selectedAccount === accountId) setSelectedAccount(null);
+      if (editingAccount === accountId) resetForm();
       refreshAccounts();
     } else {
       flash(json.error || '删除失败', 'err');
@@ -161,6 +202,13 @@ export default function XianyuMultiPage() {
             网站首页首次访问时会弹出教程图，请将教程中的获取方式一并告知买家。
           </p>
           <div className="mt-3 pt-3 border-t border-blue-200">
+            <p className="font-medium text-blue-800 mb-1">模板变量：</p>
+            <ul className="list-disc list-inside space-y-1 text-xs">
+              <li><code className="px-1 bg-blue-100 rounded text-xs">{'{key}'}</code> — 自动生成的卡密</li>
+              <li><code className="px-1 bg-blue-100 rounded text-xs">{'{buyer_id}'}</code> — 买家 ID</li>
+            </ul>
+          </div>
+          <div className="mt-3 pt-3 border-t border-blue-200">
             <p className="font-medium text-blue-800 mb-1">注意事项：</p>
             <ul className="list-disc list-inside space-y-1 text-xs">
               <li>买家需提供 <strong>AnyGen 分享链接</strong>（格式：<code className="px-1 bg-blue-100 rounded text-xs">https://www.anygen.io/task/xxx-xxx?share_id=数字</code>）</li>
@@ -183,15 +231,19 @@ export default function XianyuMultiPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold">账号列表</h2>
           <button
-            onClick={() => setShowAddForm(!showAddForm)}
+            onClick={() => { resetForm(); setShowAddForm(!showAddForm); }}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
           >
             {showAddForm ? '取消' : '添加账号'}
           </button>
         </div>
 
-        {showAddForm && (
+        {/* 添加 / 编辑表单 */}
+        {(showAddForm || editingAccount) && (
           <div className="mb-6 p-4 bg-gray-50 rounded-lg border">
+            <h3 className="font-medium text-gray-900 mb-3">
+              {editingAccount ? `编辑账号：${editingAccount}` : '添加新账号'}
+            </h3>
             <div className="space-y-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">账号ID</label>
@@ -200,11 +252,14 @@ export default function XianyuMultiPage() {
                   value={formData.accountId}
                   onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
                   placeholder="例如：account_001"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!!editingAccount}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cookie 字符串</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Cookie 字符串 {editingAccount && <span className="text-red-500">（不留空则更新）</span>}
+                </label>
                 <textarea
                   value={formData.cookies}
                   onChange={(e) => setFormData({ ...formData, cookies: e.target.value })}
@@ -213,13 +268,34 @@ export default function XianyuMultiPage() {
                   className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                 />
               </div>
-              <button
-                onClick={handleAddAccount}
-                disabled={loading}
-                className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition"
-              >
-                {loading ? '处理中...' : '确认添加'}
-              </button>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  自动回复模板
+                  <span className="text-gray-400 font-normal ml-1">（支持 {'{key}'} {'{buyer_id}'} 变量）</span>
+                </label>
+                <textarea
+                  value={formData.replyTemplate}
+                  onChange={(e) => setFormData({ ...formData, replyTemplate: e.target.value })}
+                  rows={2}
+                  placeholder="您的卡密：{key}&#10;请在 PPT 导出服务中使用此卡密"
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={editingAccount ? handleEditAccount : handleAddAccount}
+                  disabled={loading}
+                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition"
+                >
+                  {loading ? '处理中...' : editingAccount ? '保存修改' : '确认添加'}
+                </button>
+                <button
+                  onClick={resetForm}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition"
+                >
+                  取消
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -273,6 +349,16 @@ export default function XianyuMultiPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          startEdit(acc);
+                        }}
+                        disabled={loading}
+                        className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 disabled:opacity-50 transition"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
                           handleRemoveAccount(acc.account_id);
                         }}
                         disabled={loading}
@@ -284,6 +370,11 @@ export default function XianyuMultiPage() {
                   </div>
                   {acc.error_msg && (
                     <p className="text-xs text-red-600 mt-1">{acc.error_msg}</p>
+                  )}
+                  {acc.reply_template && (
+                    <p className="text-xs text-gray-500 mt-1 truncate">
+                      回复模板：{acc.reply_template}
+                    </p>
                   )}
                   <p className="text-xs text-gray-500 mt-1">
                     更新于 {new Date(acc.updated_at).toLocaleString('zh-CN')}

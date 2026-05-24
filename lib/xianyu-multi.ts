@@ -280,7 +280,7 @@ const connections = new Map<string, AccountConnection>();
 
 // --- 数据库操作 ---
 
-export function addAccount(accountId: string, cookies: string): { ok: boolean; error?: string } {
+export function addAccount(accountId: string, cookies: string, replyTemplate?: string): { ok: boolean; error?: string } {
   if (!accountId || !cookies) {
     return { ok: false, error: '账号ID和Cookie不能为空' };
   }
@@ -288,9 +288,25 @@ export function addAccount(accountId: string, cookies: string): { ok: boolean; e
   try {
     const db = getDb();
     const stmt = db.prepare(
-      "INSERT OR REPLACE INTO xianyu_accounts (account_id, cookies, status, updated_at) VALUES (?, ?, ?, datetime('now','localtime'))"
+      "INSERT OR REPLACE INTO xianyu_accounts (account_id, cookies, reply_template, status, updated_at) VALUES (?, ?, ?, ?, datetime('now','localtime'))"
     );
-    stmt.run(accountId, cookies, 'disconnected');
+    stmt.run(accountId, cookies, replyTemplate || '', 'disconnected');
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+}
+
+export function updateAccount(accountId: string, cookies: string, replyTemplate?: string): { ok: boolean; error?: string } {
+  if (!accountId || !cookies) {
+    return { ok: false, error: '账号ID和Cookie不能为空' };
+  }
+
+  try {
+    const db = getDb();
+    db.prepare(
+      "UPDATE xianyu_accounts SET cookies = ?, reply_template = ?, updated_at = datetime('now','localtime') WHERE account_id = ?"
+    ).run(cookies, replyTemplate || '', accountId);
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e.message };
@@ -312,11 +328,8 @@ export function removeAccount(accountId: string): { ok: boolean; error?: string 
 export function getAccounts(): any[] {
   try {
     const db = getDb();
-    const accounts = db.prepare('SELECT * FROM xianyu_accounts ORDER BY created_at DESC').all();
-    return accounts.map((acc: any) => ({
-      ...acc,
-      cookies: undefined,
-    }));
+    const accounts = db.prepare('SELECT id, account_id, status, error_msg, reply_template, created_at, updated_at FROM xianyu_accounts ORDER BY created_at DESC').all();
+    return accounts;
   } catch {
     return [];
   }
@@ -589,7 +602,21 @@ function handleWsMessage(conn: AccountConnection, msg: any) {
   const key = keys[0];
   const buyerId = chatId;
 
-  const replyText = `您的卡密：${key}\n请在 PPT 导出服务中使用此卡密`;
+  // 读取自动回复模板
+  let replyText: string;
+  try {
+    const db = getDb();
+    const account = db.prepare('SELECT reply_template FROM xianyu_accounts WHERE account_id = ?').get(conn.accountId) as any;
+    const template = account?.reply_template || '';
+    if (template.trim()) {
+      replyText = template.replace(/\{key\}/g, key).replace(/\{buyer_id\}/g, buyerId);
+    } else {
+      replyText = `您的卡密：${key}\n请在 PPT 导出服务中使用此卡密`;
+    }
+  } catch {
+    replyText = `您的卡密：${key}\n请在 PPT 导出服务中使用此卡密`;
+  }
+
   if (conn.ws && conn.ws.readyState === WebSocket.OPEN) {
     conn.ws.send(buildSendMessage(chatId, buyerId, conn.myId, replyText));
   }

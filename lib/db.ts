@@ -75,6 +75,11 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_xianyu_logs_account_id ON xianyu_logs(account_id);
   `);
 
+  // 迁移：添加 reply_template 列（已存在则忽略）
+  try {
+    db.exec('ALTER TABLE xianyu_accounts ADD COLUMN reply_template TEXT NOT NULL DEFAULT \'\'');
+  } catch { /* 列已存在 */ }
+
   // Seed default settings
   const insertSetting = db.prepare(
     'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)'
