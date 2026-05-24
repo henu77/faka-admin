@@ -1,10 +1,8 @@
 import { NextRequest } from 'next/server';
 import { verifyToken } from '@/lib/auth';
-import { getTaskById, resetTask, updateTaskStatus } from '@/lib/tasks';
-import { refundKey } from '@/lib/keys';
+import { getTaskById, resetTask } from '@/lib/tasks';
 import { getDb } from '@/lib/db';
-import { callExportApi } from '@/lib/exporter';
-import { sendMail } from '@/lib/mail';
+import { enqueueExport } from '@/lib/queue';
 
 export async function POST(
   request: NextRequest,
@@ -27,32 +25,9 @@ export async function POST(
   db.prepare('UPDATE keys SET used_count = used_count + 1 WHERE id = ?').run(task.key_id);
   resetTask(task.id);
 
-  processRetry(task.id, task.url, task.email, task.key_id).catch(console.error);
+  enqueueExport(task.id, task.url, task.email, task.key_id);
 
   return Response.json({ success: true, taskId: task.id, status: 'pending' });
-}
-
-async function processRetry(taskId: number, url: string, email: string, keyId: number) {
-  try {
-    const { filePath, filename } = await callExportApi(url, taskId);
-    updateTaskStatus(taskId, 'done', filePath);
-
-    await sendMail(
-      email,
-      'PPT 导出完成',
-      `<h3>您的 PPT 已导出完成</h3><p>任务编号：${taskId}</p><p>文件已作为附件发送，请查收。</p>`,
-      [{ filename, path: filePath }]
-    );
-  } catch (error: any) {
-    updateTaskStatus(taskId, 'failed', undefined, error.message);
-    refundKey(keyId);
-
-    await sendMail(
-      email,
-      'PPT 导出失败',
-      `<h3>您的 PPT 导出失败</h3><p>任务编号：${taskId}</p><p>错误信息：${error.message}</p><p>卡密使用次数已退回，请稍后重试。</p>`
-    );
-  }
 }
 
 async function checkAuth(request: NextRequest): Promise<boolean> {
