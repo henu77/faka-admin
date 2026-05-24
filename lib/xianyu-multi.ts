@@ -287,10 +287,13 @@ export function addAccount(accountId: string, cookies: string, replyTemplate?: s
 
   try {
     const db = getDb();
-    const stmt = db.prepare(
-      "INSERT OR REPLACE INTO xianyu_accounts (account_id, cookies, reply_template, status, updated_at) VALUES (?, ?, ?, ?, datetime('now','localtime'))"
-    );
-    stmt.run(accountId, cookies, replyTemplate || '', 'disconnected');
+    // 用 INSERT OR IGNORE 避免 REPLACE 触发外键 DELETE 失败
+    const result = db.prepare(
+      "INSERT OR IGNORE INTO xianyu_accounts (account_id, cookies, reply_template, status, updated_at) VALUES (?, ?, ?, ?, datetime('now','localtime'))"
+    ).run(accountId, cookies, replyTemplate || '', 'disconnected');
+    if (result.changes === 0) {
+      return { ok: false, error: '账号ID已存在，请使用编辑功能' };
+    }
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e.message };
@@ -317,8 +320,12 @@ export function removeAccount(accountId: string): { ok: boolean; error?: string 
   try {
     stopAccount(accountId);
     const db = getDb();
-    db.prepare('DELETE FROM xianyu_logs WHERE account_id = ?').run(accountId);
-    db.prepare('DELETE FROM xianyu_accounts WHERE account_id = ?').run(accountId);
+    // 事务内先删子表日志、再删主表账号，确保原子性
+    const removeAll = db.transaction(() => {
+      db.prepare('DELETE FROM xianyu_logs WHERE account_id = ?').run(accountId);
+      db.prepare('DELETE FROM xianyu_accounts WHERE account_id = ?').run(accountId);
+    });
+    removeAll();
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e.message };
