@@ -53,8 +53,7 @@ export default function HomePage() {
   const [taskStatus, setTaskStatus] = useState('');
   const [showTutorial, setShowTutorial] = useState(false);
   const [showUrlWarning, setShowUrlWarning] = useState(false);
-  const [queueLength, setQueueLength] = useState(0);
-  const [queueProcessing, setQueueProcessing] = useState(false);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
 
   // Load saved form on mount
   useEffect(() => {
@@ -71,25 +70,14 @@ export default function HomePage() {
     }
   }, []);
 
-  // Poll queue status (only when user has an active task)
+  // Cleanup SSE connection on unmount
   useEffect(() => {
-    if (!polling) return;
-    const fetchQueue = async () => {
-      try {
-        const res = await fetch('/api/queue');
-        if (res.ok) {
-          const data = await res.json();
-          setQueueLength(data.queueLength);
-          setQueueProcessing(data.processing);
-        }
-      } catch {
-        // ignore
+    return () => {
+      if (eventSource) {
+        eventSource.close();
       }
     };
-    fetchQueue();
-    const interval = setInterval(fetchQueue, 3000);
-    return () => clearInterval(interval);
-  }, [polling]);
+  }, [eventSource]);
 
   // Save form on change
   useEffect(() => {
@@ -101,7 +89,7 @@ export default function HomePage() {
     setShowTutorial(false);
   };
 
-  const handleSubmit = async (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.SyntheticEvent) => {
     if (e) e.preventDefault();
 
     // Validate URL format
@@ -131,7 +119,7 @@ export default function HomePage() {
       setResult(data);
       setTaskStatus('pending');
       setPolling(true);
-      pollStatus(data.taskId);
+      connectSSE(data.taskId);
     } catch {
       setError('网络错误');
     } finally {
@@ -139,30 +127,36 @@ export default function HomePage() {
     }
   };
 
-  const pollStatus = (taskId: number) => {
-    const interval = setInterval(async () => {
+  const connectSSE = (taskId: number) => {
+    const es = new EventSource(`/api/tasks/${taskId}/stream`);
+
+    es.onmessage = (event) => {
       try {
-        const res = await fetch(`/api/download/${taskId}`, { method: 'HEAD' });
-        if (res.ok) {
-          setTaskStatus('done');
+        const task = JSON.parse(event.data);
+        setTaskStatus(task.status || 'unknown');
+
+        if (task.status === 'done') {
           setPolling(false);
-          clearInterval(interval);
-          return;
-        }
-        const taskRes = await fetch(`/api/tasks/${taskId}`);
-        if (taskRes.ok) {
-          const taskData = await taskRes.json();
-          setTaskStatus(taskData.task?.status || 'unknown');
-          if (taskData.task?.status === 'failed') {
-            setError(taskData.task?.error_msg || '导出失败');
-            setPolling(false);
-            clearInterval(interval);
-          }
+          es.close();
+          setEventSource(null);
+        } else if (task.status === 'failed') {
+          setError(task.error_msg || '导出失败');
+          setPolling(false);
+          es.close();
+          setEventSource(null);
         }
       } catch {
         // ignore
       }
-    }, 3000);
+    };
+
+    es.onerror = () => {
+      es.close();
+      setPolling(false);
+      setEventSource(null);
+    };
+
+    setEventSource(es);
   };
 
   const handleRetry = () => {
@@ -180,16 +174,7 @@ export default function HomePage() {
           <p className="mt-2 text-sm md:text-base text-gray-500">输入卡密和链接，自动导出 PPT</p>
         </div>
 
-        {/* Queue status bar — only show when current user is waiting */}
-        {polling && (queueLength > 0 || queueProcessing) && (
-          <div className="mb-4 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-center">
-            <p className="text-sm text-amber-700">
-              {queueProcessing
-                ? `当前有 ${queueLength + 1} 个任务在处理/排队中`
-                : `当前有 ${queueLength} 个任务排队中`}
-            </p>
-          </div>
-        )}
+        {/* Queue status bar removed - SSE handles real-time updates */}
 
         <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border p-4 md:p-6 space-y-4">
           <div>
@@ -264,7 +249,7 @@ export default function HomePage() {
 
         {result && taskStatus === 'pending' && (
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-            排队中{queueLength > 0 ? `（前面还有 ${queueLength} 个任务）` : ''}，请稍候...
+            排队中，请稍候...
           </div>
         )}
 

@@ -1,7 +1,8 @@
 import { exportPptx } from './exporter';
-import { updateTaskStatus } from './tasks';
+import { updateTaskStatus, getTaskById } from './tasks';
 import { refundKey } from './keys';
 import { sendMail } from './mail';
+import { notifyTaskUpdate } from '@/app/api/tasks/[id]/stream/route';
 
 type ExportJob = {
   taskId: number;
@@ -17,8 +18,13 @@ async function runJob(job: ExportJob) {
   const { taskId, url, email, keyId } = job;
   try {
     updateTaskStatus(taskId, 'processing');
+    const task = getTaskById(taskId);
+    if (task) notifyTaskUpdate(taskId, task);
+
     const { filePath, filename } = await exportPptx(url, taskId);
     updateTaskStatus(taskId, 'done', filePath);
+    const doneTask = getTaskById(taskId);
+    if (doneTask) notifyTaskUpdate(taskId, doneTask);
 
     await sendMail(
       email,
@@ -30,6 +36,9 @@ async function runJob(job: ExportJob) {
     );
   } catch (error: any) {
     updateTaskStatus(taskId, 'failed', undefined, error.message);
+    const failedTask = getTaskById(taskId);
+    if (failedTask) notifyTaskUpdate(taskId, failedTask);
+
     refundKey(keyId);
 
     await sendMail(
