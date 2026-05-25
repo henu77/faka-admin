@@ -128,35 +128,62 @@ export default function HomePage() {
   };
 
   const connectSSE = (taskId: number) => {
-    const es = new EventSource(`/api/tasks/${taskId}/stream`);
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 10;
+    const baseReconnectDelay = 1000; // 1 秒
+    let isConnected = true;
 
-    es.onmessage = (event) => {
-      try {
-        const task = JSON.parse(event.data);
-        setTaskStatus(task.status || 'unknown');
+    const createConnection = () => {
+      const es = new EventSource(`/api/tasks/${taskId}/stream`);
 
-        if (task.status === 'done') {
-          setPolling(false);
-          es.close();
-          setEventSource(null);
-        } else if (task.status === 'failed') {
-          setError(task.error_msg || '导出失败');
-          setPolling(false);
-          es.close();
-          setEventSource(null);
+      es.onmessage = (event) => {
+        // 重置重连计数器
+        reconnectAttempts = 0;
+
+        try {
+          const task = JSON.parse(event.data);
+          setTaskStatus(task.status || 'unknown');
+
+          if (task.status === 'done') {
+            isConnected = false;
+            setPolling(false);
+            es.close();
+            setEventSource(null);
+          } else if (task.status === 'failed') {
+            isConnected = false;
+            setError(task.error_msg || '导出失败');
+            setPolling(false);
+            es.close();
+            setEventSource(null);
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
-      }
+      };
+
+      es.onerror = () => {
+        es.close();
+
+        // 如果任务还未完成，尝试重连
+        if (isConnected && reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1); // 指数退避
+          console.log(`[SSE] 连接断开，${delay}ms 后重连（第 ${reconnectAttempts} 次）`);
+          setTimeout(createConnection, delay);
+        } else {
+          isConnected = false;
+          setPolling(false);
+          setEventSource(null);
+          if (reconnectAttempts >= maxReconnectAttempts) {
+            setError('连接已断开，请刷新页面重试');
+          }
+        }
+      };
+
+      setEventSource(es);
     };
 
-    es.onerror = () => {
-      es.close();
-      setPolling(false);
-      setEventSource(null);
-    };
-
-    setEventSource(es);
+    createConnection();
   };
 
   const handleRetry = () => {
