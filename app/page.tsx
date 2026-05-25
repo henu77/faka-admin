@@ -129,8 +129,8 @@ export default function HomePage() {
 
   const connectSSE = (taskId: number) => {
     let reconnectAttempts = 0;
-    const maxReconnectAttempts = 10;
-    const baseReconnectDelay = 1000; // 1 秒
+    const maxReconnectAttempts = 5;
+    const baseReconnectDelay = 3000; // 3 秒
     let isConnected = true;
 
     const createConnection = () => {
