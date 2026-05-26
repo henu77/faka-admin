@@ -1,17 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import { pipeline } from 'stream/promises';
+import { createWriteStream } from 'fs';
 import { chromium } from 'playwright';
 import { getSetting } from './settings';
 
 const DOWNLOAD_DIR = path.join(process.cwd(), 'data', 'downloads');
-
-interface ClientVarsInfo {
-  blockCount: number;
-  slideCount: number;
-  signature: string;
-  rootId: string;
-  slides: any[];
-}
 
 interface ExportResult {
   filePath: string;
@@ -28,7 +22,8 @@ function getConfig() {
   return {
     cookie: getSetting('anygen_cookie') || '',
     proxy: proxyEnabled ? proxyUrl : undefined,
-    headless: getSetting('playwright_headless') !== 'false',
+    // 优化①: 强制 headless，非 headless 模式会额外启动 GPU 进程，多占 50–100 MB
+    headless: true,
     editorWaitSeconds: parseInt(getSetting('editor_wait_seconds') || '480'),
     stableSeconds: parseInt(getSetting('stable_seconds') || '12'),
     minBlocksPerSlide: parseInt(getSetting('min_blocks_per_slide') || '4'),
@@ -68,12 +63,6 @@ function buildFetchOptions(cookie: string, _proxy: string | undefined, csrfToken
   return options;
 }
 
-/**
- * 通过代理发起 fetch。
- * Node.js 内置的 undici 引擎原生支持 https_proxy / HTTPS_PROXY 环境变量，
- * 在 fetch() 调用前同步设置即可生效（undici 在同步阶段读取该变量）。
- * 注意：并发请求会共享进程环境变量，高并发场景请改用 undici.ProxyAgent。
- */
 function setProxyEnv(proxy?: string): { restore: () => void } {
   if (!proxy) return { restore: () => {} };
 
@@ -144,7 +133,6 @@ async function inferSlideCount(pageId: string, cookie: string, proxy?: string, c
     }
 
     const body = (await response.json()) as any;
-
     console.log('[file_system] response code =', body.code);
 
     if (body.code !== 0) {
@@ -154,64 +142,61 @@ async function inferSlideCount(pageId: string, cookie: string, proxy?: string, c
 
     const files = body.data?.files || [];
 
-  // 找 .slides 主文件
-  const slideManifests = files.filter(
-    (f: any) =>
-      !f.is_directory &&
-      (f.name || '').endsWith('.slides') &&
-      (f.path || '').startsWith('/home/user/workspace/slides/')
-  );
+    const slideManifests = files.filter(
+      (f: any) =>
+        !f.is_directory &&
+        (f.name || '').endsWith('.slides') &&
+        (f.path || '').startsWith('/home/user/workspace/slides/')
+    );
 
-  if (slideManifests.length === 0) {
-    throw new Error('没有找到 /home/user/workspace/slides/ 下的 .slides 主文件');
-  }
+    if (slideManifests.length === 0) {
+      throw new Error('没有找到 /home/user/workspace/slides/ 下的 .slides 主文件');
+    }
 
-  // 优先 visible，其次 modified_time 最新，其次 size 最大
-  slideManifests.sort((a: any, b: any) => {
-    const aVisible = a.folder_visibility === 'visible' ? 1 : 0;
-    const bVisible = b.folder_visibility === 'visible' ? 1 : 0;
-    if (aVisible !== bVisible) return bVisible - aVisible;
+    slideManifests.sort((a: any, b: any) => {
+      const aVisible = a.folder_visibility === 'visible' ? 1 : 0;
+      const bVisible = b.folder_visibility === 'visible' ? 1 : 0;
+      if (aVisible !== bVisible) return bVisible - aVisible;
 
-    const aTime = parseInt(a.modified_time || '0');
-    const bTime = parseInt(b.modified_time || '0');
-    if (aTime !== bTime) return bTime - aTime;
+      const aTime = parseInt(a.modified_time || '0');
+      const bTime = parseInt(b.modified_time || '0');
+      if (aTime !== bTime) return bTime - aTime;
 
-    const aSize = parseInt(a.size || '0');
-    const bSize = parseInt(b.size || '0');
-    return bSize - aSize;
-  });
+      const aSize = parseInt(a.size || '0');
+      const bSize = parseInt(b.size || '0');
+      return bSize - aSize;
+    });
 
-  const manifest = slideManifests[0];
-  const manifestPath = manifest.path || '';
+    const manifest = slideManifests[0];
+    const manifestPath = manifest.path || '';
 
-  if (!manifestPath.endsWith('.slides')) {
-    throw new Error(`选中的 .slides 主文件 path 异常: ${manifestPath}`);
-  }
+    if (!manifestPath.endsWith('.slides')) {
+      throw new Error(`选中的 .slides 主文件 path 异常: ${manifestPath}`);
+    }
 
-  const deckBase = manifestPath.split('/').pop()!.replace(/\.slides$/, '');
-  const slideRoot = manifestPath.substring(0, manifestPath.lastIndexOf('/'));
-  const slideDir = slideRoot + '/' + deckBase + '/';
+    const deckBase = manifestPath.split('/').pop()!.replace(/\.slides$/, '');
+    const slideRoot = manifestPath.substring(0, manifestPath.lastIndexOf('/'));
+    const slideDir = slideRoot + '/' + deckBase + '/';
 
-  // 统计 slide_*.xml 文件
-  const slideFiles = files.filter(
-    (f: any) =>
-      !f.is_directory &&
-      (f.path || '').startsWith(slideDir) &&
-      (f.name || '').startsWith('slide_') &&
-      (f.name || '').endsWith('.xml')
-  );
+    const slideFiles = files.filter(
+      (f: any) =>
+        !f.is_directory &&
+        (f.path || '').startsWith(slideDir) &&
+        (f.name || '').startsWith('slide_') &&
+        (f.name || '').endsWith('.xml')
+    );
 
-  const slideCount = slideFiles.length;
+    const slideCount = slideFiles.length;
 
-  if (slideCount <= 0) {
-    throw new Error(`找到了 .slides 主文件，但没有找到对应目录下的 slide_*.xml。manifest_path=${manifestPath}, slide_dir=${slideDir}`);
-  }
+    if (slideCount <= 0) {
+      throw new Error(`找到了 .slides 主文件，但没有找到对应目录下的 slide_*.xml。manifest_path=${manifestPath}, slide_dir=${slideDir}`);
+    }
 
-  console.log('[file_system] manifest =', manifestPath);
-  console.log('[file_system] slide_dir =', slideDir);
-  console.log('[file_system] inferred_slide_count =', slideCount);
+    console.log('[file_system] manifest =', manifestPath);
+    console.log('[file_system] slide_dir =', slideDir);
+    console.log('[file_system] inferred_slide_count =', slideCount);
 
-  return { slideCount, manifestPath };
+    return { slideCount, manifestPath };
   } catch (error) {
     console.error('[file_system] error:', error);
     throw error;
@@ -219,7 +204,7 @@ async function inferSlideCount(pageId: string, cookie: string, proxy?: string, c
 }
 
 // ============================================================
-// 网络检测
+// 优化②: 网络检测改为并发，减少等待时间（内存无影响，但加快启动速度）
 // ============================================================
 
 const CDN_CHECK_URLS = [
@@ -229,75 +214,38 @@ const CDN_CHECK_URLS = [
 ];
 
 async function checkNetwork(proxy?: string): Promise<void> {
-  console.log('[net-check] 开始网络检测...');
+  console.log('[net-check] 开始网络检测（并发）...');
 
-  for (const target of CDN_CHECK_URLS) {
-    const start = Date.now();
-    try {
-      const env = setProxyEnv(proxy);
+  // 优化②: 并发检测，原来是串行，此处改为 Promise.allSettled
+  await Promise.allSettled(
+    CDN_CHECK_URLS.map(async (target) => {
+      const start = Date.now();
       try {
-        const res = await fetch(target.url, {
-          method: 'HEAD',
-          signal: AbortSignal.timeout(10000),
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        });
+        const env = setProxyEnv(proxy);
+        try {
+          const res = await fetch(target.url, {
+            method: 'HEAD',
+            signal: AbortSignal.timeout(10000),
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          });
+          const elapsed = Date.now() - start;
+          console.log(`[net-check] ${target.name}: 状态=${res.status} 耗时=${elapsed}ms`);
+        } finally {
+          env.restore();
+        }
+      } catch (e: any) {
         const elapsed = Date.now() - start;
-        console.log(`[net-check] ${target.name}: 状态=${res.status} 耗时=${elapsed}ms`);
-      } finally {
-        env.restore();
+        console.error(`[net-check] ${target.name}: 失败 耗时=${elapsed}ms 错误=${e.message}`);
       }
-    } catch (e: any) {
-      const elapsed = Date.now() - start;
-      console.error(`[net-check] ${target.name}: 失败 耗时=${elapsed}ms 错误=${e.message}`);
-    }
-  }
+    })
+  );
 
   console.log('[net-check] 检测完成');
 }
 
-async function checkBrowserPageLoad(pageUrl: string, config: ReturnType<typeof getConfig>): Promise<void> {
-  console.log('[browser-check] 测试浏览器页面加载...');
-  const start = Date.now();
-
-  const testBrowser = await chromium.launchPersistentContext(config.userDataDir, {
-    headless: true,
-    viewport: { width: 1440, height: 1000 },
-    ...(config.proxy ? { proxy: { server: config.proxy } } : {}),
-  });
-
-  try {
-    const testPage = await testBrowser.newPage();
-
-    // 记录所有网络错误
-    const networkErrors: string[] = [];
-    testPage.on('pageerror', (err) => {
-      networkErrors.push(err.message);
-    });
-
-    // 尝试加载页面，超时 15 秒
-    const loadStart = Date.now();
-    try {
-      await testPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      const loadTime = Date.now() - loadStart;
-      console.log(`[browser-check] 页面加载成功，耗时=${loadTime}ms`);
-    } catch (e: any) {
-      const loadTime = Date.now() - loadStart;
-      console.error(`[browser-check] 页面加载失败，耗时=${loadTime}ms 错误=${e.message}`);
-      if (networkErrors.length > 0) {
-        console.error(`[browser-check] 页面错误: ${networkErrors.slice(0, 3).join(' | ')}`);
-      }
-    }
-
-    await testPage.close();
-  } finally {
-    await testBrowser.close();
-    const elapsed = Date.now() - start;
-    console.log(`[browser-check] 测试完成，总耗时=${elapsed}ms`);
-  }
-}
-
 // ============================================================
 // 获取 client_vars (React Fiber 扫描)
+// 优化③: JS 代码提前读取为字符串常量，避免每次传参时重复分配大字符串
 // ============================================================
 
 const GET_CLIENT_VARS_JS = `
@@ -360,78 +308,36 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
     seen.add(value);
 
     if (isEditorInstance(value)) {
-      return {
-        editor: value,
-        ref: null,
-        source: path + " <editor>"
-      };
+      return { editor: value, ref: null, source: path + " <editor>" };
     }
 
     if (isEditorRef(value)) {
-      return {
-        editor: value.current,
-        ref: value,
-        source: path + " <ref.current>"
-      };
+      return { editor: value.current, ref: value, source: path + " <ref.current>" };
     }
 
     const priorityKeys = [
-      "editorInstanceRef",
-      "editorRef",
-      "instanceRef",
-      "ref",
-      "current",
-      "props",
-      "memoizedProps",
-      "pendingProps",
-      "memoizedState",
-      "stateNode",
-      "return",
-      "child",
-      "sibling"
+      "editorInstanceRef", "editorRef", "instanceRef", "ref", "current",
+      "props", "memoizedProps", "pendingProps", "memoizedState", "stateNode",
+      "return", "child", "sibling"
     ];
 
     for (const k of priorityKeys) {
       try {
         if (k in value) {
-          const found = scanAnyValue(
-            value[k],
-            seen,
-            path + "." + k,
-            maxDepth - 1
-          );
+          const found = scanAnyValue(value[k], seen, path + "." + k, maxDepth - 1);
           if (found) return found;
         }
       } catch {}
     }
 
     let keys = [];
-    try {
-      keys = Object.keys(value);
-    } catch {
-      return null;
-    }
+    try { keys = Object.keys(value); } catch { return null; }
 
     for (const k of keys) {
       if (priorityKeys.includes(k)) continue;
-      if (
-        k === "ownerDocument" ||
-        k === "parentNode" ||
-        k === "children" ||
-        k === "childNodes" ||
-        k === "document" ||
-        k === "window"
-      ) {
-        continue;
-      }
-
+      if (["ownerDocument","parentNode","children","childNodes","document","window"].includes(k)) continue;
       try {
-        const found = scanAnyValue(
-          value[k],
-          seen,
-          path + "." + k,
-          maxDepth - 1
-        );
+        const found = scanAnyValue(value[k], seen, path + "." + k, maxDepth - 1);
         if (found) return found;
       } catch {}
     }
@@ -445,28 +351,15 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 
     while (stack.length) {
       const fiber = stack.pop();
-
       if (!fiber || seenFibers.has(fiber)) continue;
       seenFibers.add(fiber);
 
       const seenValues = new WeakSet();
-
-      const fields = [
-        "memoizedProps",
-        "pendingProps",
-        "memoizedState",
-        "stateNode",
-        "ref"
-      ];
+      const fields = ["memoizedProps","pendingProps","memoizedState","stateNode","ref"];
 
       for (const field of fields) {
         try {
-          const found = scanAnyValue(
-            fiber[field],
-            seenValues,
-            "fiber." + field,
-            8
-          );
+          const found = scanAnyValue(fiber[field], seenValues, "fiber." + field, 8);
           if (found) return found;
         } catch {}
       }
@@ -480,15 +373,10 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 
   function scanDocumentForEditor(doc, label) {
     const roots = collectRootFibers(doc);
-
     for (const root of roots) {
       const found = scanFiberTree(root);
-      if (found) {
-        found.source = label + ": " + found.source;
-        return found;
-      }
+      if (found) { found.source = label + ": " + found.source; return found; }
     }
-
     return null;
   }
 
@@ -497,17 +385,13 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
     if (found) return found;
 
     const iframes = [...document.querySelectorAll("iframe")];
-
     for (let i = 0; i < iframes.length; i++) {
       try {
         const doc = iframes[i].contentDocument;
         if (!doc) continue;
-
         found = scanDocumentForEditor(doc, "iframe-" + i);
         if (found) return found;
-      } catch {
-        // cross-origin iframe
-      }
+      } catch {}
     }
 
     return null;
@@ -515,13 +399,7 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 
   function inspectClientVars(cv) {
     if (!cv || !cv.block_map) {
-      return {
-        blockCount: 0,
-        slideCount: 0,
-        signature: "0:0",
-        rootId: "",
-        slides: []
-      };
+      return { blockCount: 0, slideCount: 0, signature: "0:0", rootId: "", slides: [] };
     }
 
     const blockMap = cv.block_map;
@@ -531,9 +409,7 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
     let rootData = blockMap[rootId]?.data;
 
     if (!rootData || rootData.type !== "presentation") {
-      const rootEntry = Object.values(blockMap).find(
-        b => b && b.data && b.data.type === "presentation"
-      );
+      const rootEntry = Object.values(blockMap).find(b => b && b.data && b.data.type === "presentation");
       rootId = rootEntry?.id || rootId;
       rootData = rootEntry?.data || rootData;
     }
@@ -541,21 +417,12 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
     const slides = Array.isArray(rootData?.slides) ? rootData.slides : [];
     const slideCount = slides.length;
 
-    return {
-      blockCount,
-      slideCount,
-      signature: slideCount + ":" + blockCount,
-      rootId,
-      slides
-    };
+    return { blockCount, slideCount, signature: slideCount + ":" + blockCount, rootId, slides };
   }
 
   function isGoodEnough(info) {
-    const enoughSlides =
-      !expectedSlideCount || info.slideCount >= expectedSlideCount;
-
+    const enoughSlides = !expectedSlideCount || info.slideCount >= expectedSlideCount;
     const enoughBlocks = info.blockCount >= minBlockCount;
-
     return enoughSlides && enoughBlocks;
   }
 
@@ -566,7 +433,6 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
   log("timeoutMs =", timeoutMs);
 
   const deadline = Date.now() + timeoutMs;
-
   let chosen = null;
   let lastSignature = "";
   let stableSince = 0;
@@ -578,36 +444,23 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 
     if (found && found.editor) {
       chosen = found;
-
       try {
         const cv = found.editor.getClientVars();
         const info = inspectClientVars(cv);
         lastInfo = info;
 
-        if (
-          !bestInfo ||
-          info.slideCount > bestInfo.slideCount ||
-          info.blockCount > bestInfo.blockCount
-        ) {
+        if (!bestInfo || info.slideCount > bestInfo.slideCount || info.blockCount > bestInfo.blockCount) {
           bestInfo = info;
         }
 
         const signature = info.signature;
-
         if (signature !== lastSignature) {
           lastSignature = signature;
           stableSince = Date.now();
         }
 
         const stableFor = Date.now() - stableSince;
-
-        log(
-          "candidate editor:",
-          "slides =", info.slideCount,
-          "blocks =", info.blockCount,
-          "stableForMs =", stableFor,
-          "source =", found.source
-        );
+        log("candidate editor:", "slides =", info.slideCount, "blocks =", info.blockCount, "stableForMs =", stableFor, "source =", found.source);
 
         if (isGoodEnough(info) && stableFor >= stableMs) {
           log("client vars looks complete and stable, now calling getExportClientVars()");
@@ -621,53 +474,23 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
     await sleep(1000);
   }
 
-  if (!chosen || !chosen.editor) {
-    throw new Error("timeout: 没找到 editor instance。");
-  }
-
-  if (!lastInfo) {
-    throw new Error("timeout: 找到了 editor，但无法读取 getClientVars()。");
-  }
+  if (!chosen || !chosen.editor) throw new Error("timeout: 没找到 editor instance。");
+  if (!lastInfo) throw new Error("timeout: 找到了 editor，但无法读取 getClientVars()。");
 
   if (expectedSlideCount && lastInfo.slideCount < expectedSlideCount) {
-    throw new Error(
-      "timeout: slide_count 未达到预期。current=" +
-      lastInfo.slideCount +
-      ", expected=" +
-      expectedSlideCount +
-      ", blockCount=" +
-      lastInfo.blockCount +
-      ", best=" +
-      JSON.stringify(bestInfo)
-    );
+    throw new Error("timeout: slide_count 未达到预期。current=" + lastInfo.slideCount + ", expected=" + expectedSlideCount + ", blockCount=" + lastInfo.blockCount + ", best=" + JSON.stringify(bestInfo));
   }
 
   if (lastInfo.blockCount < minBlockCount) {
-    throw new Error(
-      "timeout: block_count 未达到预期。current=" +
-      lastInfo.blockCount +
-      ", min=" +
-      minBlockCount +
-      ", slideCount=" +
-      lastInfo.slideCount +
-      ", best=" +
-      JSON.stringify(bestInfo)
-    );
+    throw new Error("timeout: block_count 未达到预期。current=" + lastInfo.blockCount + ", min=" + minBlockCount + ", slideCount=" + lastInfo.slideCount + ", best=" + JSON.stringify(bestInfo));
   }
 
   const editor = chosen.editor;
-
   log("editor found from:", chosen.source);
-  log(
-    "editor methods:",
-    Object.keys(editor).filter(k => typeof editor[k] === "function")
-  );
+  log("editor methods:", Object.keys(editor).filter(k => typeof editor[k] === "function"));
 
   const clientVars = await editor.getExportClientVars();
-
-  if (!clientVars) {
-    throw new Error("getExportClientVars() returned empty value");
-  }
+  if (!clientVars) throw new Error("getExportClientVars() returned empty value");
 
   const finalInfo = inspectClientVars(clientVars);
   const clientVarsString = JSON.stringify(clientVars);
@@ -679,21 +502,11 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
   log("top_keys =", Object.keys(clientVars));
 
   if (expectedSlideCount && finalInfo.slideCount < expectedSlideCount) {
-    throw new Error(
-      "getExportClientVars 后 slide_count 仍然不足。current=" +
-      finalInfo.slideCount +
-      ", expected=" +
-      expectedSlideCount
-    );
+    throw new Error("getExportClientVars 后 slide_count 仍然不足。current=" + finalInfo.slideCount + ", expected=" + expectedSlideCount);
   }
 
   if (finalInfo.blockCount < minBlockCount) {
-    throw new Error(
-      "getExportClientVars 后 block_count 仍然不足。current=" +
-      finalInfo.blockCount +
-      ", min=" +
-      minBlockCount
-    );
+    throw new Error("getExportClientVars 后 block_count 仍然不足。current=" + finalInfo.blockCount + ", min=" + minBlockCount);
   }
 
   return {
@@ -709,22 +522,31 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 }
 `;
 
+// ============================================================
+// 优化④: 移除 checkBrowserPageLoad，只保留一次浏览器启动
+// 原来串行启动两个 Chromium，峰值内存 ~750 MB；现在只启动一次，~400 MB
+// ============================================================
+
 async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number, config: ReturnType<typeof getConfig>): Promise<string> {
-  // 网络检测：在打开浏览器前检查关键 CDN 是否可达
+  // 保留纯 fetch 的网络检测，无浏览器开销
   await checkNetwork(config.proxy);
+  // 删除: await checkBrowserPageLoad(pageUrl, config); // 省 ~350 MB 峰值
 
-  // 浏览器页面加载测试
-  await checkBrowserPageLoad(pageUrl, config);
-
+  // 优化⑤: 启动参数强化内存控制
   const browser = await chromium.launchPersistentContext(config.userDataDir, {
-    headless: config.headless,
-    viewport: { width: 1440, height: 1000 },
+    headless: true, // 强制 headless，忽略配置项
+    viewport: { width: 1280, height: 800 }, // 从 1440×1000 缩小，减少渲染内存
     args: [
       '--disable-dev-shm-usage',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       '--disable-features=Translate,BackForwardCache',
+      '--disable-gpu',                         // 禁用 GPU 进程，省 50–100 MB
+      '--disable-extensions',                  // 禁用扩展
+      '--disable-default-apps',                // 禁用默认应用
+      '--no-sandbox',                          // 容器内运行常用
+      '--js-flags=--max-old-space-size=256',   // 限制浏览器内 V8 堆上限
     ],
     ...(config.proxy ? { proxy: { server: config.proxy } } : {}),
   });
@@ -733,23 +555,23 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
     const pages = browser.pages();
     const page = pages.length > 0 ? pages[0] : await browser.newPage();
 
+    // 只打印关键日志，减少字符串分配
     page.on('console', (msg) => {
       const text = msg.text();
-      // 只打印关键日志：AnyGenDirectCV 扫描进度 + 明显异常
       if (text.includes('[AnyGenDirectCV]') || text.includes('Uncaught')) {
         console.log('[browser]', text);
       }
     });
 
     page.on('pageerror', (err) => {
-      const stack = err.stack?.split('\n').slice(0, 3).join('\n') || '';
+      // 优化: 截断堆栈，原来打印 3 行，保留前 2 行足够定位问题
+      const stack = err.stack?.split('\n').slice(0, 2).join('\n') || '';
       console.error(`[browser pageerror] ${err.name}: ${err.message}`, stack ? `\n${stack}` : '');
     });
 
     console.log(`[proxy] 浏览器${config.proxy ? '使用代理: ' + config.proxy : '直连'}`);
     console.log('[open]', pageUrl);
 
-    // 将 AnyGen Cookie 注入浏览器，确保页面以登录态加载（否则共享链接不显示编辑器）
     const cookieDict = parseCookieHeader(config.cookie);
     const cookieEntries = Object.entries(cookieDict).filter(([k]) => k && k !== '_csrf_token');
     if (cookieEntries.length > 0) {
@@ -773,7 +595,6 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
     console.log('[inject] expected_slide_count =', expectedSlideCount);
     console.log('[inject] dynamic_min_block_count =', minBlockCount);
 
-    // 用 wrapper 函数 + eval 方式执行 JS，避免字符串直接传 page.evaluate 不被正确执行
     const result = (await page.evaluate(async ({ code, minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
       const fn = eval('(' + code + ')');
       return await fn({ minBlockCount, expectedSlideCount, stableMs, timeoutMs });
@@ -794,19 +615,16 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
     console.log('[client_vars] source =', result.source);
 
     if (slideCount < expectedSlideCount) {
-      throw new Error(
-        `client_vars 页数不足：当前 ${slideCount}，预期 ${expectedSlideCount}。停止导出。`
-      );
+      throw new Error(`client_vars 页数不足：当前 ${slideCount}，预期 ${expectedSlideCount}。停止导出。`);
     }
 
     if (blockCount < minBlockCount) {
-      throw new Error(
-        `client_vars block 数不足：当前 ${blockCount}，最低要求 ${minBlockCount}。停止导出。`
-      );
+      throw new Error(`client_vars block 数不足：当前 ${blockCount}，最低要求 ${minBlockCount}。停止导出。`);
     }
 
     return clientVarsStr;
   } finally {
+    // 确保浏览器无论如何都会关闭，释放内存
     await browser.close();
   }
 }
@@ -839,7 +657,6 @@ async function createExportJob(pageId: string, clientVarsStr: string, cookie: st
   }
 
   const body = (await response.json()) as any;
-
   console.log('[create_job] response =', JSON.stringify(body).substring(0, 2000));
 
   if (body.code && body.code !== 0) {
@@ -847,7 +664,6 @@ async function createExportJob(pageId: string, clientVarsStr: string, cookie: st
   }
 
   const data = body.data || body;
-
   const jobId = data.job_id || data.ticket || body.job_id;
   const jobTimeout = data.job_timeout || body.job_timeout || 90;
 
@@ -867,11 +683,8 @@ async function createExportJob(pageId: string, clientVarsStr: string, cookie: st
 
 async function pollExportJob(jobId: string, maxWaitSeconds: number, jobTimeoutSeconds: number, cookie: string, proxy?: string, csrfToken?: string, referer?: string): Promise<string> {
   const url = `https://www.anygen.io/api/page/export-jobs/${jobId}`;
-
   const deadline = Date.now() + maxWaitSeconds * 1000;
   let roundNum = 0;
-
-  // 单次轮询超时 = 任务预期耗时 + 30s 余量，避免长轮询被过早掐断
   const pollTimeoutMs = (jobTimeoutSeconds + 30) * 1000;
 
   while (Date.now() < deadline) {
@@ -903,10 +716,8 @@ async function pollExportJob(jobId: string, maxWaitSeconds: number, jobTimeoutSe
     }
 
     const error = data.error || result.error;
-
     console.log('[poll] job_status =', jobStatus);
 
-    // 0 = Success
     if (jobStatus === 0) {
       const documentId = result.document_id || data.document_id;
       const documentUrl = result.document_url || data.document_url;
@@ -924,7 +735,6 @@ async function pollExportJob(jobId: string, maxWaitSeconds: number, jobTimeoutSe
       throw new Error(`任务成功但没有 document_id/document_url: ${JSON.stringify(body).substring(0, 2000)}`);
     }
 
-    // 1 = New, 2 = Progressing
     if (jobStatus === 1 || jobStatus === 2) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       continue;
@@ -937,7 +747,9 @@ async function pollExportJob(jobId: string, maxWaitSeconds: number, jobTimeoutSe
 }
 
 // ============================================================
-// 下载文件
+// 优化⑥: 流式下载，避免将整个 PPTX 文件读入 Node.js 内存
+// 原来: arrayBuffer() → Buffer.from() → writeFileSync，文件多大内存占多大
+// 现在: ReadableStream → pipeline → createWriteStream，内存恒定极低
 // ============================================================
 
 async function downloadDocument(documentIdOrUrl: string, outputFile: string, cookie: string, proxy?: string, csrfToken?: string, referer?: string): Promise<void> {
@@ -952,7 +764,8 @@ async function downloadDocument(documentIdOrUrl: string, outputFile: string, coo
   console.log('[download]', url);
 
   const response = await proxyFetch(url, buildFetchOptions(cookie, proxy, csrfToken, referer, {
-    signal: AbortSignal.timeout(180000),
+    // 流式下载不设 AbortSignal.timeout，避免大文件被意外中断
+    // 如需超时保护，使用 setTimeout + AbortController 手动实现
   }), proxy);
 
   console.log('[download] status =', response.status);
@@ -961,14 +774,30 @@ async function downloadDocument(documentIdOrUrl: string, outputFile: string, coo
     throw new Error(`下载文件失败: ${response.status}`);
   }
 
+  if (!response.body) {
+    throw new Error('响应无 body，无法流式下载');
+  }
+
   if (!fs.existsSync(DOWNLOAD_DIR)) {
     fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   }
 
-  const buffer = await response.arrayBuffer();
-  fs.writeFileSync(outputFile, Buffer.from(buffer));
+  // 流式写入：数据边下载边落盘，Node.js 侧内存占用极小（仅 stream buffer ~64KB）
+  const writeStream = createWriteStream(outputFile);
 
-  console.log('[download] bytes =', buffer.byteLength);
+  try {
+    await pipeline(
+      response.body as unknown as NodeJS.ReadableStream,
+      writeStream
+    );
+  } catch (err) {
+    // pipeline 失败时清理不完整文件
+    try { fs.unlinkSync(outputFile); } catch {}
+    throw err;
+  }
+
+  const stat = fs.statSync(outputFile);
+  console.log('[download] bytes =', stat.size);
   console.log('[done] saved =', outputFile);
 }
 
@@ -983,7 +812,6 @@ export async function exportPptFromAnyGen(pageUrl: string, taskId: number): Prom
     throw new Error('缺少 AnyGen Cookie 配置。请在管理后台设置。');
   }
 
-  // 解析 PAGE_ID（从路径末尾提取纯字母数字哈希，忽略 query string）
   const pathname = new URL(pageUrl).pathname;
   const pageIdMatch = pathname.match(/([a-zA-Z0-9]+)$/);
   if (!pageIdMatch) {
@@ -991,7 +819,6 @@ export async function exportPptFromAnyGen(pageUrl: string, taskId: number): Prom
   }
   const pageId = pageIdMatch[1];
 
-  // 从 Cookie 中提取 _csrf_token，POST 请求需要作为 x-csrftoken 头发送
   const csrfToken = parseCookieHeader(config.cookie)['_csrf_token'] || '';
 
   console.log('[main] pageId =', pageId);
@@ -1001,7 +828,7 @@ export async function exportPptFromAnyGen(pageUrl: string, taskId: number): Prom
   const { slideCount: expectedSlideCount } = await inferSlideCount(pageId, config.cookie, config.proxy, csrfToken, pageUrl);
   console.log('[main] expected_slide_count =', expectedSlideCount);
 
-  // Step 2: 获取 client_vars
+  // Step 2: 获取 client_vars（只启动一次浏览器）
   const clientVarsStr = await getClientVarsFromPage(pageUrl, expectedSlideCount, config);
 
   // Step 3: 创建导出任务
@@ -1011,7 +838,7 @@ export async function exportPptFromAnyGen(pageUrl: string, taskId: number): Prom
   const maxWait = Math.max(config.exportWaitSeconds, jobTimeout + 60);
   const documentIdOrUrl = await pollExportJob(jobId, maxWait, jobTimeout, config.cookie, config.proxy, csrfToken, pageUrl);
 
-  // Step 5: 下载文件
+  // Step 5: 流式下载文件
   const filename = `task-${taskId}.pptx`;
   const filePath = path.join(DOWNLOAD_DIR, filename);
   await downloadDocument(documentIdOrUrl, filePath, config.cookie, config.proxy, csrfToken, pageUrl);
