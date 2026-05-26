@@ -11,6 +11,12 @@ const MAP_FILE = path.join(CACHE_DIR, 'url-map.json');
 // 用一次真实浏览器加载，收集所有 CDN 请求
 export async function warmCdnCache(pageUrl: string, config: any) {
   const urlMap: Record<string, string> = loadMap();
+
+  // 确保缓存目录存在
+  if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+
   const browser = await chromium.launchPersistentContext(config.userDataDir, {
     headless: true,
     args: ['--disable-gpu', '--no-sandbox'],

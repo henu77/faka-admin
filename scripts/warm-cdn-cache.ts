@@ -1,5 +1,5 @@
 import path from 'path';
-import { warmCdnCache } from '../lib/cdn-cache.js';
+import { warmCdnCache } from '../lib/cdn-cache';
 
 // 配置
 const config = {
