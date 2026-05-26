@@ -219,6 +219,43 @@ async function inferSlideCount(pageId: string, cookie: string, proxy?: string, c
 }
 
 // ============================================================
+// 网络检测
+// ============================================================
+
+const CDN_CHECK_URLS = [
+  { name: 'AnyGen 主站', url: 'https://www.anygen.io' },
+  { name: '飞书 CDN', url: 'https://sf16-scmcdn.larksuitecdn.com' },
+  { name: 'AnyGen API', url: 'https://www.anygen.io/api/page/file_system' },
+];
+
+async function checkNetwork(proxy?: string): Promise<void> {
+  console.log('[net-check] 开始网络检测...');
+
+  for (const target of CDN_CHECK_URLS) {
+    const start = Date.now();
+    try {
+      const env = setProxyEnv(proxy);
+      try {
+        const res = await fetch(target.url, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(10000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        });
+        const elapsed = Date.now() - start;
+        console.log(`[net-check] ${target.name}: 状态=${res.status} 耗时=${elapsed}ms`);
+      } finally {
+        env.restore();
+      }
+    } catch (e: any) {
+      const elapsed = Date.now() - start;
+      console.error(`[net-check] ${target.name}: 失败 耗时=${elapsed}ms 错误=${e.message}`);
+    }
+  }
+
+  console.log('[net-check] 检测完成');
+}
+
+// ============================================================
 // 获取 client_vars (React Fiber 扫描)
 // ============================================================
 
@@ -632,6 +669,9 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 `;
 
 async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number, config: ReturnType<typeof getConfig>): Promise<string> {
+  // 网络检测：在打开浏览器前检查关键 CDN 是否可达
+  await checkNetwork(config.proxy);
+
   const browser = await chromium.launchPersistentContext(config.userDataDir, {
     headless: config.headless,
     viewport: { width: 1440, height: 1000 },
