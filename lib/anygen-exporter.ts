@@ -4,6 +4,7 @@ import { pipeline } from 'stream/promises';
 import { createWriteStream } from 'fs';
 import { chromium } from 'playwright';
 import { getSetting } from './settings';
+import { applyCdnCacheRoute } from './cdn-cache';
 
 const DOWNLOAD_DIR = path.join(process.cwd(), 'data', 'downloads');
 
@@ -471,7 +472,7 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
       }
     }
 
-    await sleep(1000);
+    await sleep(3000);
   }
 
   if (!chosen || !chosen.editor) throw new Error("timeout: 没找到 editor instance。");
@@ -585,6 +586,9 @@ async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number
       );
       console.log('[cookie] 已注入浏览器 Cookie，共', cookieEntries.length, '项');
     }
+
+    // CDN 缓存拦截：必须在 goto 之前注册，命中本地缓存时 0 网络延迟
+    await applyCdnCacheRoute(page);
 
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
     await page.waitForTimeout(2_000);
