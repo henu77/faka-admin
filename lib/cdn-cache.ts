@@ -2,7 +2,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { chromium } from 'playwright';
+import { chromium, Page } from 'playwright';
 
 
 const CACHE_DIR = path.join(process.cwd(), 'data', 'cdn-cache');
@@ -41,6 +41,49 @@ export async function warmCdnCache(pageUrl: string, config: any) {
   await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: 120_000 });
   await browser.close();
   console.log(`[cdn-cache] 缓存了 ${Object.keys(urlMap).length} 个资源`);
+}
+
+// 在页面加载前应用 CDN 缓存拦截
+export async function applyCdnCacheRoute(page: Page): Promise<void> {
+  const urlMap: Record<string, string> = loadMap();
+
+  if (Object.keys(urlMap).length === 0) {
+    console.log('[cdn-cache] 缓存为空，跳过缓存拦截');
+    return;
+  }
+
+  let hitCount = 0;
+  let missCount = 0;
+
+  await page.route('**://sf16-scmcdn.larksuitecdn.com/**', async (route) => {
+    const url = route.request().url();
+
+    if (urlMap[url]) {
+      // 命中缓存
+      hitCount++;
+      try {
+        await route.fulfill({ path: urlMap[url], contentType: guessContentType(url) });
+      } catch (e) {
+        // 缓存文件可能已删除，回源
+        console.warn(`[cdn-cache] 缓存文件不存在: ${urlMap[url]}`);
+        const resp = await route.fetch();
+        await route.fulfill({ response: resp });
+        missCount++;
+      }
+    } else {
+      // 未命中，回源
+      missCount++;
+      const resp = await route.fetch();
+      await route.fulfill({ response: resp });
+    }
+  });
+
+  // 页面加载完成后打印统计
+  page.on('close', () => {
+    if (hitCount > 0 || missCount > 0) {
+      console.log(`[cdn-cache] 命中: ${hitCount}, 未命中: ${missCount}`);
+    }
+  });
 }
 
 function guessContentType(url: string) {
