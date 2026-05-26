@@ -255,6 +255,47 @@ async function checkNetwork(proxy?: string): Promise<void> {
   console.log('[net-check] 检测完成');
 }
 
+async function checkBrowserPageLoad(pageUrl: string, config: ReturnType<typeof getConfig>): Promise<void> {
+  console.log('[browser-check] 测试浏览器页面加载...');
+  const start = Date.now();
+
+  const testBrowser = await chromium.launchPersistentContext(config.userDataDir, {
+    headless: true,
+    viewport: { width: 1440, height: 1000 },
+    ...(config.proxy ? { proxy: { server: config.proxy } } : {}),
+  });
+
+  try {
+    const testPage = await testBrowser.newPage();
+
+    // 记录所有网络错误
+    const networkErrors: string[] = [];
+    testPage.on('pageerror', (err) => {
+      networkErrors.push(err.message);
+    });
+
+    // 尝试加载页面，超时 15 秒
+    const loadStart = Date.now();
+    try {
+      await testPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      const loadTime = Date.now() - loadStart;
+      console.log(`[browser-check] 页面加载成功，耗时=${loadTime}ms`);
+    } catch (e: any) {
+      const loadTime = Date.now() - loadStart;
+      console.error(`[browser-check] 页面加载失败，耗时=${loadTime}ms 错误=${e.message}`);
+      if (networkErrors.length > 0) {
+        console.error(`[browser-check] 页面错误: ${networkErrors.slice(0, 3).join(' | ')}`);
+      }
+    }
+
+    await testPage.close();
+  } finally {
+    await testBrowser.close();
+    const elapsed = Date.now() - start;
+    console.log(`[browser-check] 测试完成，总耗时=${elapsed}ms`);
+  }
+}
+
 // ============================================================
 // 获取 client_vars (React Fiber 扫描)
 // ============================================================
@@ -671,6 +712,9 @@ async ({ minBlockCount, expectedSlideCount, stableMs, timeoutMs }) => {
 async function getClientVarsFromPage(pageUrl: string, expectedSlideCount: number, config: ReturnType<typeof getConfig>): Promise<string> {
   // 网络检测：在打开浏览器前检查关键 CDN 是否可达
   await checkNetwork(config.proxy);
+
+  // 浏览器页面加载测试
+  await checkBrowserPageLoad(pageUrl, config);
 
   const browser = await chromium.launchPersistentContext(config.userDataDir, {
     headless: config.headless,
