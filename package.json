@@ -6,7 +6,7 @@
     "dev": "node scripts/server.js dev",
     "build": "next build",
     "start": "node scripts/server.js start",
-    "warm-cdn": "npx ts-node scripts/warm-cdn-cache.ts"
+    "warm-cdn": "npm run build && node scripts/warm-cdn-cache.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
